@@ -1,0 +1,131 @@
+import ipywidgets as widgets
+from IPython.display import display, Image, clear_output
+import requests
+from PIL import Image as PILImage
+from io import BytesIO
+import base64
+import os
+
+# Google Vision API ključ (zamijenite svojim ključem!)
+GOOGLE_VISION_API_KEY = "AIzaSyCfjL1GSo6c3q6n-kQz2prjidERInLU-RU"
+
+# UI Komponente
+image_url_input = widgets.Text(
+    value='',
+    placeholder='Zalijepi URL slike ovdje...',
+    description='URL:',
+    disabled=False
+)
+upload_button = widgets.FileUpload(
+    accept='image/*',  # Dozvoljava samo slike
+    multiple=False
+)
+ocr_button = widgets.Button(description="Prepoznaj tekst")
+describe_button = widgets.Button(description="Opiši sliku")
+output = widgets.Output()
+
+# Funkcija za OCR pomoću Google Vision API-ja
+def perform_ocr(image_bytes):
+    vision_api_url = f"https://vision.googleapis.com/v1/images:annotate?key={GOOGLE_VISION_API_KEY}"
+    payload = {
+        "requests": [
+            {
+                "image": {"content": image_bytes},
+                "features": [{"type": "TEXT_DETECTION"}]
+            }
+        ]
+    }
+    response = requests.post(vision_api_url, json=payload)
+    if response.status_code == 200:
+        text = response.json().get("responses", [{}])[0].get("textAnnotations", [{}])[0].get("description", "OCR nije uspio.")
+        return text
+    return f"Greška u obradi teksta. Status kod: {response.status_code}, Odgovor: {response.text}"
+
+# Funkcija za poboljšan opis slike pomoću Google Vision API-ja
+def describe_image(image_bytes):
+    vision_api_url = f"https://vision.googleapis.com/v1/images:annotate?key={GOOGLE_VISION_API_KEY}"
+    payload = {
+        "requests": [
+            {
+                "image": {"content": image_bytes},
+                "features": [
+                    {"type": "LABEL_DETECTION"},
+                    {"type": "WEB_DETECTION"}
+                ]
+            }
+        ]
+    }
+    response = requests.post(vision_api_url, json=payload)
+    if response.status_code == 200:
+        responses = response.json().get("responses", [{}])[0]
+
+        # Dohvati osnovne oznake slike (LABEL_DETECTION)
+        labels = responses.get("labelAnnotations", [])
+        label_descriptions = [label.get("description", "") for label in labels]
+
+        # Dohvati kontekst s weba (WEB_DETECTION)
+        web_entities = responses.get("webDetection", {}).get("webEntities", [])
+        web_descriptions = [entity.get("description", "") for entity in web_entities if "description" in entity]
+
+        # Kreiraj poboljšani opis slike
+        final_description = ""
+        if label_descriptions:
+            final_description += f"Prepoznati objekti: {', '.join(label_descriptions[:5])}. "  # Uzmi prvih 5 oznaka
+
+        if web_descriptions:
+            final_description += f"Možda je povezana s: {', '.join(web_descriptions[:3])}. "  # Uzmi prvih 3 web konteksta
+
+        return final_description if final_description else "Nije moguće generirati bogatiji opis."
+
+    return f"Greška u generiranju opisa. Status kod: {response.status_code}, Odgovor: {response.text}"
+
+# Obrada URL slike ili uploadane slike
+def process_image(event, action):
+    with output:
+        clear_output()
+        image_bytes = None
+
+        # Ako je unesen URL
+        if image_url_input.value:
+            try:
+                response = requests.get(image_url_input.value)
+                if response.status_code == 200:
+                    img = PILImage.open(BytesIO(response.content))
+                    new_width = int(img.width * (200 / img.height))
+                    img = img.resize((new_width, 200))  # Ograniči visinu na 200 px, širina proporcionalna
+                    display(img)
+                    image_bytes = base64.b64encode(response.content).decode("utf-8")
+                else:
+                    print("Greška pri dohvaćanju slike s URL-a.")
+                    return
+            except Exception as e:
+                print("Neispravan URL ili nedostupna slika.", e)
+                return
+
+        # Ako je uploadana slika
+        elif upload_button.value:
+            uploaded_file = next(iter(upload_button.value.values()))
+            img = PILImage.open(BytesIO(uploaded_file['content']))
+            new_width = int(img.width * (200 / img.height))
+            img = img.resize((new_width, 200))  # Ograniči visinu na 200 px, širina proporcionalna
+            display(img)
+            image_bytes = base64.b64encode(uploaded_file['content']).decode("utf-8")
+
+        else:
+            print("Nije odabrana nijedna slika.")
+            return
+
+        # Pokretanje OCR-a ili opisa slike
+        if action == "ocr":
+            text = perform_ocr(image_bytes)
+            print("Prepoznati tekst:\n", text)
+        elif action == "describe":
+            description = describe_image(image_bytes)
+            print("Opis slike:", description)
+
+# Povezivanje događaja
+ocr_button.on_click(lambda event: process_image(event, "ocr"))
+describe_button.on_click(lambda event: process_image(event, "describe"))
+
+# Prikaz UI-a
+display(image_url_input, upload_button, ocr_button, describe_button, output)
