@@ -129,3 +129,51 @@ describe_button.on_click(lambda event: process_image(event, "describe"))
 
 # Prikaz UI-a
 display(image_url_input, upload_button, ocr_button, describe_button, output)
+
+# Funkcija za poboljšan opis slike pomoću Google Vision API-ja
+def describe_image(image_bytes):
+    vision_api_url = f"https://vision.googleapis.com/v1/images:annotate?key={GOOGLE_VISION_API_KEY}"
+    payload = {
+        "requests": [
+            {
+                "image": {"content": image_bytes},
+                "features": [
+                    {"type": "LABEL_DETECTION"},
+                    {"type": "WEB_DETECTION"},
+                    {"type": "DOCUMENT_TEXT_DETECTION"}
+                ]
+            }
+        ]
+    }
+
+    response = requests.post(vision_api_url, json=payload)
+    print("Odgovor API-ja:", response.json())  # Debugging output
+
+    if response.status_code == 200:
+        responses = response.json().get("responses", [{}])[0]
+
+        # 1Dohvati osnovne oznake slike (LABEL_DETECTION)
+        labels = responses.get("labelAnnotations", [])
+        label_descriptions = [label.get("description", "") for label in labels]
+
+        # Dohvati kontekst s weba (WEB_DETECTION)
+        web_entities = responses.get("webDetection", {}).get("webEntities", [])
+        web_descriptions = [entity.get("description", "") for entity in web_entities if "description" in entity]
+
+        # Dohvati prepoznati tekst ako postoji (DOCUMENT_TEXT_DETECTION)
+        document_text = responses.get("textAnnotations", [{}])[0].get("description", "").strip()
+
+        # Kreiraj poboljšani opis slike
+        final_description = "Opis slike: "
+        if document_text:
+            final_description += f"Ova slika sadrži tekst: \"{document_text[:100]}...\". "  # Skrati ako je predugačak
+
+        if label_descriptions:
+            final_description += f"Prepoznati objekti: {', '.join(label_descriptions[:5])}. "  # Uzmi prvih 5 oznaka
+
+        if web_descriptions:
+            final_description += f"Možda je povezana s: {', '.join(web_descriptions[:3])}. "  # Uzmi prvih 3 web konteksta
+
+        return final_description if final_description != "Opis slike: " else "Nije moguće generirati bogatiji opis."
+
+    return f"Greška u generiranju opisa. Status kod: {response.status_code}, Odgovor: {response.text}"
